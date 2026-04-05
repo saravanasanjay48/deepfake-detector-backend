@@ -6,7 +6,6 @@ import torch
 import requests
 import io
 import os
-import base64
 
 app = Flask(__name__)
 CORS(app)
@@ -24,6 +23,8 @@ def query_hf_api(image_bytes):
     if HF_TOKEN:
         headers["Authorization"] = f"Bearer {HF_TOKEN}"
     response = requests.post(HF_API_URL, headers=headers, data=image_bytes)
+    print(f"HF API status: {response.status_code}")
+    print(f"HF API response: {response.text[:500]}")
     return response.json()
 
 @app.route('/health', methods=['GET'])
@@ -32,30 +33,31 @@ def health():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
-
-    file = request.files['file']
-    image_bytes = file.read()
-    image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-
-    # Detect and crop face
-    face = mtcnn(image)
-    if face is None:
-        face_image = image.resize((224, 224))
-    else:
-        from torchvision import transforms
-        face_image = transforms.ToPILImage()(face.cpu())
-        face_image = face_image.resize((224, 224))
-
-    # Convert face to bytes
-    buf = io.BytesIO()
-    face_image.save(buf, format='JPEG')
-    face_bytes = buf.getvalue()
-
-    # Call HuggingFace API
     try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file uploaded'}), 400
+
+        file = request.files['file']
+        image_bytes = file.read()
+        image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+
+        # Detect and crop face
+        face = mtcnn(image)
+        if face is None:
+            face_image = image.resize((224, 224))
+        else:
+            from torchvision import transforms
+            face_image = transforms.ToPILImage()(face.cpu())
+            face_image = face_image.resize((224, 224))
+
+        # Convert face to bytes
+        buf = io.BytesIO()
+        face_image.save(buf, format='JPEG')
+        face_bytes = buf.getvalue()
+
+        # Call HuggingFace API
         result = query_hf_api(face_bytes)
+        print(f"HF API result: {result}")
 
         if isinstance(result, list):
             fake_prob = 0.5
@@ -85,10 +87,16 @@ def predict():
                     'symmetry': 0
                 }
             })
+        elif isinstance(result, dict) and 'error' in result:
+            print(f"HF API error: {result}")
+            return jsonify({'error': f"Model error: {result['error']}"}), 503
         else:
+            print(f"Unexpected result: {result}")
             return jsonify({'error': 'Model loading, please try again in 30 seconds'}), 503
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
