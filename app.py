@@ -1,28 +1,38 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from PIL import Image
-from facenet_pytorch import MTCNN
 import torch
 import requests
 import io
 import os
 import time
+import threading
 
 app = Flask(__name__)
 CORS(app)
 
-device = 'cpu'
-print("Loading face detector...")
-mtcnn = MTCNN(keep_all=False, margin=20, device=device)
-print("Face detector ready!")
+# Global model variable
+mtcnn = None
+model_ready = False
+
+def load_models():
+    global mtcnn, model_ready
+    print("Loading face detector in background...")
+    from facenet_pytorch import MTCNN
+    mtcnn = MTCNN(keep_all=False, margin=20, device='cpu')
+    model_ready = True
+    print("Face detector ready!")
+
+# Load models in background thread so Flask starts immediately
+thread = threading.Thread(target=load_models)
+thread.daemon = True
+thread.start()
 
 HF_API_URL = "https://api-inference.huggingface.co/models/prithivMLmods/deepfake-detector-model-v1"
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 def query_hf_api(image_bytes):
-    headers = {
-        "x-wait-for-model": "true"
-    }
+    headers = {"x-wait-for-model": "true"}
     if HF_TOKEN:
         headers["Authorization"] = f"Bearer {HF_TOKEN}"
 
@@ -62,11 +72,17 @@ def query_hf_api(image_bytes):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok'})
+    return jsonify({
+        'status': 'ok',
+        'model_ready': model_ready
+    })
 
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
+        if not model_ready:
+            return jsonify({'error': 'Server is starting up, please wait 30 seconds and try again'}), 503
+
         if 'file' not in request.files:
             return jsonify({'error': 'No file uploaded'}), 400
 
@@ -121,10 +137,8 @@ def predict():
                 }
             })
         elif isinstance(result, dict) and 'error' in result:
-            print(f"HF API error: {result}")
             return jsonify({'error': 'Model loading, please wait 30 seconds and try again'}), 503
         else:
-            print(f"Unexpected result: {result}")
             return jsonify({'error': 'Unexpected response, please try again'}), 503
 
     except Exception as e:
