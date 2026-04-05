@@ -6,6 +6,7 @@ import torch
 import requests
 import io
 import os
+import time
 
 app = Flask(__name__)
 CORS(app)
@@ -22,10 +23,40 @@ def query_hf_api(image_bytes):
     headers = {}
     if HF_TOKEN:
         headers["Authorization"] = f"Bearer {HF_TOKEN}"
-    response = requests.post(HF_API_URL, headers=headers, data=image_bytes)
-    print(f"HF API status: {response.status_code}")
-    print(f"HF API response: {response.text[:500]}")
-    return response.json()
+
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                HF_API_URL,
+                headers=headers,
+                data=image_bytes,
+                timeout=30
+            )
+            print(f"Attempt {attempt+1} - Status: {response.status_code}")
+            print(f"Response: {response.text[:300]}")
+
+            if response.status_code == 503:
+                print("Model loading, waiting 10 seconds...")
+                time.sleep(10)
+                continue
+
+            if response.text.strip() == '':
+                print("Empty response, waiting 5 seconds...")
+                time.sleep(5)
+                continue
+
+            return response.json()
+
+        except requests.exceptions.Timeout:
+            print(f"Timeout on attempt {attempt+1}")
+            time.sleep(5)
+            continue
+        except Exception as e:
+            print(f"Error on attempt {attempt+1}: {e}")
+            time.sleep(5)
+            continue
+
+    return {'error': 'Model unavailable after 3 attempts'}
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -57,7 +88,7 @@ def predict():
 
         # Call HuggingFace API
         result = query_hf_api(face_bytes)
-        print(f"HF API result: {result}")
+        print(f"Final result: {result}")
 
         if isinstance(result, list):
             fake_prob = 0.5
@@ -89,10 +120,10 @@ def predict():
             })
         elif isinstance(result, dict) and 'error' in result:
             print(f"HF API error: {result}")
-            return jsonify({'error': f"Model error: {result['error']}"}), 503
+            return jsonify({'error': f"Model loading, please try again in 30 seconds"}), 503
         else:
             print(f"Unexpected result: {result}")
-            return jsonify({'error': 'Model loading, please try again in 30 seconds'}), 503
+            return jsonify({'error': 'Unexpected response, please try again'}), 503
 
     except Exception as e:
         import traceback
