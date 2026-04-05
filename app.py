@@ -20,7 +20,9 @@ HF_API_URL = "https://api-inference.huggingface.co/models/prithivMLmods/deepfake
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 def query_hf_api(image_bytes):
-    headers = {}
+    headers = {
+        "x-wait-for-model": "true"
+    }
     if HF_TOKEN:
         headers["Authorization"] = f"Bearer {HF_TOKEN}"
 
@@ -30,14 +32,14 @@ def query_hf_api(image_bytes):
                 HF_API_URL,
                 headers=headers,
                 data=image_bytes,
-                timeout=30
+                timeout=60
             )
             print(f"Attempt {attempt+1} - Status: {response.status_code}")
             print(f"Response: {response.text[:300]}")
 
             if response.status_code == 503:
-                print("Model loading, waiting 10 seconds...")
-                time.sleep(10)
+                print("Model loading, waiting 15 seconds...")
+                time.sleep(15)
                 continue
 
             if response.text.strip() == '':
@@ -120,7 +122,7 @@ def predict():
             })
         elif isinstance(result, dict) and 'error' in result:
             print(f"HF API error: {result}")
-            return jsonify({'error': f"Model loading, please try again in 30 seconds"}), 503
+            return jsonify({'error': 'Model loading, please wait 30 seconds and try again'}), 503
         else:
             print(f"Unexpected result: {result}")
             return jsonify({'error': 'Unexpected response, please try again'}), 503
