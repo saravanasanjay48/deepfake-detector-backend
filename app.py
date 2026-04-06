@@ -1,35 +1,18 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from PIL import Image
-import torch
 import requests
 import io
 import os
 import time
-import threading
+from PIL import Image
 
 app = Flask(__name__)
 CORS(app)
 
-# Global model variable
-mtcnn = None
-model_ready = False
-
-def load_models():
-    global mtcnn, model_ready
-    print("Loading face detector in background...")
-    from facenet_pytorch import MTCNN
-    mtcnn = MTCNN(keep_all=False, margin=20, device='cpu')
-    model_ready = True
-    print("Face detector ready!")
-
-# Load models in background thread so Flask starts immediately
-thread = threading.Thread(target=load_models)
-thread.daemon = True
-thread.start()
-
 HF_API_URL = "https://api-inference.huggingface.co/models/prithivMLmods/deepfake-detector-model-v1"
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
+
+print("Server starting...")
 
 def query_hf_api(image_bytes):
     headers = {"x-wait-for-model": "true"}
@@ -72,40 +55,26 @@ def query_hf_api(image_bytes):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({
-        'status': 'ok',
-        'model_ready': model_ready
-    })
+    return jsonify({'status': 'ok'})
 
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
-        if not model_ready:
-            return jsonify({'error': 'Server is starting up, please wait 30 seconds and try again'}), 503
-
         if 'file' not in request.files:
             return jsonify({'error': 'No file uploaded'}), 400
 
         file = request.files['file']
         image_bytes = file.read()
+
+        # Resize image to save bandwidth
         image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-
-        # Detect and crop face
-        face = mtcnn(image)
-        if face is None:
-            face_image = image.resize((224, 224))
-        else:
-            from torchvision import transforms
-            face_image = transforms.ToPILImage()(face.cpu())
-            face_image = face_image.resize((224, 224))
-
-        # Convert face to bytes
+        image = image.resize((224, 224))
         buf = io.BytesIO()
-        face_image.save(buf, format='JPEG')
-        face_bytes = buf.getvalue()
+        image.save(buf, format='JPEG')
+        image_bytes = buf.getvalue()
 
-        # Call HuggingFace API
-        result = query_hf_api(face_bytes)
+        # Call HuggingFace API directly
+        result = query_hf_api(image_bytes)
         print(f"Final result: {result}")
 
         if isinstance(result, list):
@@ -148,4 +117,5 @@ def predict():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
+    print(f"Starting on port {port}")
     app.run(host='0.0.0.0', port=port)
